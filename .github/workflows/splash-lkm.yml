@@ -9,6 +9,10 @@
 # CRCs matching device), then M= build our module. vermagic is lax (vendor
 # 6.6.89 kos load on 6.6.147 kernel), CRCs + KCFI are the real gate.
 #
+# NOTE: maximize-build-space MUST run before checkout - it remounts the
+# workspace dir on a new LVM volume and skips migration when the dir is
+# non-empty (data loss).
+#
 # Usage:
 #   1. Put splash_probe.c + Makefile in splash-lkm/ of this repo
 #   2. Actions -> "Build splash LKM" -> Run workflow
@@ -36,10 +40,7 @@ jobs:
       CLANG_VERSION: r510928
 
     steps:
-      - name: Checkout (module source lives in this repo)
-        uses: actions/checkout@v4
-
-      - name: Maximize build space
+      - name: Maximize build space (MUST be before checkout)
         uses: easimon/maximize-build-space@master
         with:
           root-reserve-mb: 8192
@@ -48,6 +49,9 @@ jobs:
           remove-android: 'true'
           remove-haskell: 'true'
           remove-codeql: 'true'
+
+      - name: Checkout (module source lives in this repo)
+        uses: actions/checkout@v4
 
       - name: Install build dependencies
         run: |
@@ -93,6 +97,7 @@ jobs:
 
       - name: Build splash_probe module (M=)
         run: |
+          ls -la "$GITHUB_WORKSPACE/splash-lkm/"
           cd kernel_common
           export PATH="$GITHUB_WORKSPACE/clang-src/clang-${CLANG_VERSION}/bin:$PATH"
           export LLVM=1 LLVM_IAS=1
