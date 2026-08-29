@@ -87,7 +87,11 @@ jobs:
           export PATH="$GITHUB_WORKSPACE/clang-src/clang-${CLANG_VERSION}/bin:$PATH"
           export LLVM=1 LLVM_IAS=1
           make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 gki_defconfig
-          make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 -j"$(nproc)" prepare
+          # modules_prepare (NOT just prepare) also builds scripts/module.lds
+          # which is required by Makefile.modfinal %.ko rule; without it
+          # modfinal fails: "No rule to make target 'X.ko', needed by '__modfinal'"
+          make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 -j"$(nproc)" modules_prepare
+          ls -la out/scripts/module.lds
           grep -E 'CONFIG_CFI_CLANG|CONFIG_MODVERSIONS' out/.config | head
           # Use device-accurate symbol versions for module CRC matching
           cp "$GITHUB_WORKSPACE/splash-lkm/Module.symvers" out/Module.symvers
