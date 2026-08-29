@@ -45,7 +45,7 @@ static ulong size = SPLASH_SIZE_DEFAULT;
 module_param(size, ulong, 0644);
 MODULE_PARM_DESC(size, "splash region size");
 
-static char *mode = "dump";
+static char *mode = "none";
 module_param(mode, charp, 0644);
 MODULE_PARM_DESC(mode, "dump | write");
 
@@ -65,6 +65,42 @@ static struct task_struct *anim_thread;
 /* Panel geometry guess: 1264 wide, cmd mode, RGB8888 typical splash stride */
 #define PANEL_W		1264
 #define TEST_H		240	/* rows we touch at top of buffer */
+
+
+/* Gradient forensic probe: each step prints a marker; on crash the last
+ * marker in dmesg tells exactly which access pattern killed the kernel.
+ * Run with: insmod splash_probe.ko mode=gradient  (after capturing dmesg) */
+static void probe_gradient(void)
+{
+	u32 w[8];
+	int i;
+	size_t nonzero = 0, zero = 0;
+
+	pr_info("splash_probe: [C] read word0\n");
+	w[0] = readl(vaddr);
+	pr_info("splash_probe: [D] word0 = 0x%08x\n", w[0]);
+
+	pr_info("splash_probe: [E] read words 0..7\n");
+	for (i = 0; i < 8; i++)
+		w[i] = readl(vaddr + i * 4);
+	pr_info("splash_probe: [F] words: %08x %08x %08x %08x %08x %08x %08x %08x\n",
+		w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7]);
+
+	pr_info("splash_probe: [G] sample 4096 bytes (step=4)\n");
+	for (i = 0; i < 4096; i++) {
+		u8 b = readb(vaddr + (size_t)i * 4);
+		if (b)
+			nonzero++;
+		else
+			zero++;
+	}
+	pr_info("splash_probe: [H] sample done nonzero=%zu zero=%zu\n", nonzero, zero);
+
+	pr_info("splash_probe: [I] hex dump 256B\n");
+	print_hex_dump(KERN_INFO, "splash_probe hdr: ", DUMP_PREFIX_OFFSET,
+		       16, 1, (void __force *)vaddr, 256, true);
+	pr_info("splash_probe: [J] hex dump done\n");
+}
 
 static void dump_region(void)
 {
@@ -178,8 +214,22 @@ static int __init splash_probe_init(void)
 			return -ENOMEM;
 		}
 	}
-	pr_info("splash_probe: mapped pa=0x%lx size=0x%lx -> va=%px (wc=%d)\n",
-		pa, size, vaddr, 1);
+	pr_info("splash_probe: [A] ioremap done, [B] mapped pa=0x%lx size=0x%lx -> va=%px\n",
+		pa, size, vaddr);
+
+	if (!strcmp(mode, "none")) {
+		pr_info("splash_probe: mode=none, mapping only, safe unload\n");
+		iounmap(vaddr);
+		vaddr = NULL;
+		return 0;
+	}
+
+	if (!strcmp(mode, "gradient")) {
+		probe_gradient();
+		iounmap(vaddr);
+		vaddr = NULL;
+		return 0;
+	}
 
 	if (!strcmp(mode, "dump")) {
 		dump_region();
