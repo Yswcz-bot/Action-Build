@@ -1,22 +1,24 @@
 # Build splash_probe.ko (cont_splash live-write LKM) for OnePlus Ace 5 Pro
 #
 # Toolchain matching (verified against device):
-#   - kernel: 6.6.147-android15-8-...-4k (KMI android15-8, GKI 6.6.118 source)
+#   - kernel: 6.6.147-android15-8-...-4k (KMI android15-8, GKI 6.6.118 source + OP patches)
 #   - clang:  r510928 (clang 18.0.0) - from OnePlus kernel_manifest pinned commit
 #   - KCFI:   CONFIG_CFI_CLANG=y
 #
-# Strategy: build the GKI common kernel once (produces Module.symvers with
-# CRCs matching device), then M= build our module. vermagic is lax (vendor
-# 6.6.89 kos load on 6.6.147 kernel), CRCs + KCFI are the real gate.
+# Strategy:
+#   - clone GKI source (needed for headers/scripts)
+#   - use DEVICE-accurate Module.symvers (committed in splash-lkm/Module.symvers,
+#     extracted from device kernel, module_layout CRC = 0x4e276f37)
+#   - copy it into kernel tree so kbuild generates module with matching CRCs
+#   - M= build the module. No full kernel build needed -> ~10 min
 #
-# NOTE: maximize-build-space MUST run before checkout - it remounts the
-# workspace dir on a new LVM volume and skips migration when the dir is
-# non-empty (data loss).
+# Why not full build: full 6.6.118 build produces module_layout CRC 0x6500052f
+# which the device kernel rejects ("disagrees about version of symbol
+# module_layout"). Device-accurate symvers fixes that.
 #
 # Usage:
-#   1. Put splash_probe.c + Makefile in splash-lkm/ of this repo
-#   2. Actions -> "Build splash LKM" -> Run workflow
-#   3. Download splash_probe.ko, copy to device, insmod
+#   1. Actions -> "Build splash LKM" -> Run workflow
+#   2. Download splash_probe.ko, copy to device, insmod
 #
 name: Build splash LKM
 
@@ -50,7 +52,7 @@ jobs:
           remove-haskell: 'true'
           remove-codeql: 'true'
 
-      - name: Checkout (module source lives in this repo)
+      - name: Checkout (module source + device Module.symvers)
         uses: actions/checkout@v4
 
       - name: Install build dependencies
@@ -79,21 +81,17 @@ jobs:
           git checkout FETCH_HEAD
           clang-$CLANG_VERSION/bin/clang --version | head -2
 
-      - name: Configure kernel (gki_defconfig)
+      - name: Configure + prepare kernel tree (no full build)
         run: |
           cd kernel_common
           export PATH="$GITHUB_WORKSPACE/clang-src/clang-${CLANG_VERSION}/bin:$PATH"
           export LLVM=1 LLVM_IAS=1
           make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 gki_defconfig
-          grep -E 'CONFIG_CFI_CLANG|CONFIG_MODVERSIONS|CONFIG_MODULE_SIG' out/.config | head
-
-      - name: Build kernel (generates Module.symvers with matching CRCs)
-        run: |
-          cd kernel_common
-          export PATH="$GITHUB_WORKSPACE/clang-src/clang-${CLANG_VERSION}/bin:$PATH"
-          export LLVM=1 LLVM_IAS=1
-          make -j"$(nproc)" O=out ARCH=arm64 LLVM=1 LLVM_IAS=1
-          ls -la out/Module.symvers && wc -l out/Module.symvers
+          make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 -j"$(nproc)" prepare
+          grep -E 'CONFIG_CFI_CLANG|CONFIG_MODVERSIONS' out/.config | head
+          # Use device-accurate symbol versions for module CRC matching
+          cp "$GITHUB_WORKSPACE/splash-lkm/Module.symvers" out/Module.symvers
+          wc -l out/Module.symvers
 
       - name: Build splash_probe module (M=)
         run: |
@@ -106,6 +104,9 @@ jobs:
           ls -la "$GITHUB_WORKSPACE/splash-lkm"/*.ko
           "$GITHUB_WORKSPACE/clang-src/clang-${CLANG_VERSION}/bin/llvm-readelf" \
             -p .modinfo "$GITHUB_WORKSPACE/splash-lkm/splash_probe.ko" | grep -iE 'vermagic|license|description'
+          echo "=== module_layout CRC check ==="
+          "$GITHUB_WORKSPACE/clang-src/clang-${CLANG_VERSION}/bin/llvm-objdump" \
+            -s -j __versions "$GITHUB_WORKSPACE/splash-lkm/splash_probe.ko" | grep -A1 -B1 'module_layout' || true
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
